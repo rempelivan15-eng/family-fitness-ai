@@ -1,0 +1,9 @@
+{
+  "name": "Family Fitness AI",
+  "short_name": "Fitness AI",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f3f4f6",
+  "theme_color": "#111827",
+  "description": "Private two-person nutrition, workout and progress tracker"
+}
