@@ -8,7 +8,16 @@ function json(res, status, body) {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return json(res, 405, { error: 'POST only' });
-  if (!process.env.OPENAI_API_KEY) return json(res, 500, { error: 'OPENAI_API_KEY is not configured' });
+
+  const apiKey = (
+    process.env.OPENAI_API_KEY ||
+    process.env.OPEN_API_KEY ||
+    process.env.open_api_key ||
+    process.env.openai_api_key ||
+    ''
+  ).trim();
+
+  if (!apiKey) return json(res, 500, { error: 'OpenAI API key is not configured for this deployment' });
 
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
@@ -22,7 +31,7 @@ export default async function handler(req, res) {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
