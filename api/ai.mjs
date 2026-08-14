@@ -1,6 +1,11 @@
 import { FOODS, KNOWN_KEYS, nutritionFor } from '../data/foods.mjs';
 
 const MODEL = 'gpt-5-mini';
+const NUMBER_WORDS = {
+  one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,
+  uno:1,una:1,dos:2,tres:3,cuatro:4,cinco:5,seis:6,siete:7,ocho:8,nueve:9,diez:10
+};
+const FILLER = new Set(['i','ate','had','have','for','breakfast','lunch','dinner','and','with','plus','a','an','the','de','y','con','comi','comí','desayuno','comida','cena']);
 
 function json(res, status, body) {
   res.statusCode = status;
@@ -8,17 +13,67 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+function norm(s='') {
+  return String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
+}
+
+function parseQty(token) {
+  if (!token) return 1;
+  if (/^\d+(?:\.\d+)?$/.test(token)) return Number(token);
+  return NUMBER_WORDS[token] || 1;
+}
+
+function deterministicFoodParse(text) {
+  const input = norm(text);
+  const matches = [];
+  const aliases = [];
+  for (const key of KNOWN_KEYS) {
+    for (const alias of FOODS[key].aliases) aliases.push({ key, alias: norm(alias) });
+  }
+  aliases.sort((a,b)=>b.alias.length-a.alias.length);
+
+  const occupied = [];
+  for (const {key,alias} of aliases) {
+    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    const qtyWords = Object.keys(NUMBER_WORDS).join('|');
+    const re = new RegExp(`(?:\\b(\\d+(?:\\.\\d+)?|${qtyWords})\\s+)?\\b${escaped}\\b`,'g');
+    let m;
+    while ((m = re.exec(input))) {
+      const start=m.index,end=re.lastIndex;
+      if (occupied.some(([a,b])=>start<b&&end>a)) continue;
+      occupied.push([start,end]);
+      matches.push({key,quantity:parseQty(m[1]),start,end});
+    }
+  }
+  if (!matches.length) return null;
+  matches.sort((a,b)=>a.start-b.start);
+
+  let leftover = input;
+  for (const m of [...matches].sort((a,b)=>b.start-a.start)) leftover = leftover.slice(0,m.start)+' '+leftover.slice(m.end);
+  const unknownWords = norm(leftover).split(' ').filter(Boolean).filter(w=>!FILLER.has(w) && !NUMBER_WORDS[w] && !/^\d+(?:\.\d+)?$/.test(w));
+  if (unknownWords.length) return null;
+
+  const items = matches.map(m=>({key:m.key,quantity:m.quantity,...nutritionFor(m.key,m.quantity,null,null)}));
+  const totals = items.reduce((a,i)=>({
+    calories:a.calories+i.calories,
+    protein_g:a.protein_g+i.protein_g,
+    carbs_g:a.carbs_g+i.carbs_g,
+    fat_g:a.fat_g+i.fat_g
+  }),{calories:0,protein_g:0,carbs_g:0,fat_g:0});
+  const name = items.map(i=>`${i.quantity} ${i.label}${i.quantity===1?'':'s'}`).join(' + ');
+  return {
+    type:'food',name,items,
+    calories:Math.round(totals.calories),
+    protein_g:+totals.protein_g.toFixed(1),
+    carbs_g:+totals.carbs_g.toFixed(1),
+    fat_g:+totals.fat_g.toFixed(1),
+    note:'Calculated from local reference foods; no AI estimate used.',
+    answer:'',source:'local-reference',model:'deterministic-local'
+  };
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return json(res, 405, { error: 'POST only' });
-
-  const apiKey = (
-    process.env.OPENAI_API_KEY ||
-    process.env.OPEN_API_KEY ||
-    process.env.open_api_key ||
-    process.env.openai_api_key ||
-    ''
-  ).trim();
-  if (!apiKey) return json(res, 500, { error: 'OpenAI API key is not configured for this deployment' });
 
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
@@ -26,54 +81,40 @@ export default async function handler(req, res) {
     const user = String(body.user || 'User').slice(0, 40);
     if (!text) return json(res, 400, { error: 'Missing text' });
 
+    const direct = deterministicFoodParse(text);
+    if (direct) return json(res, 200, direct);
+
+    const apiKey = (
+      process.env.OPENAI_API_KEY || process.env.OPEN_API_KEY || process.env.open_api_key || process.env.openai_api_key || ''
+    ).trim();
+    if (!apiKey) return json(res, 500, { error: 'OpenAI API key is not configured for this deployment' });
+
     const catalog = KNOWN_KEYS.map(k => `${k}: ${FOODS[k].label} (${FOODS[k].per})`).join('; ');
-    const system = `You are a precise parser for a nutrition and workout logging app. ONLY parse the CURRENT user message. Never import foods or quantities from previous messages or context. User: ${user}.
+    const system = `You are a precise fallback parser for a nutrition and workout logging app. ONLY parse the CURRENT user message. Never import foods or quantities from previous messages or context. User: ${user}.
 Known local food keys: ${catalog}.
-For food/drink, split the current message into ingredients. Match a known key when clearly appropriate. For a generic unqualified tortilla, prefer corn_tortilla_6in; if the user explicitly says flour/harina, use flour_tortilla_8in. For each matched item provide quantity and, when stated or reasonably inferable, grams or ml. For unknown prepared foods, use key 'unknown' and estimate only that item's calories/protein/carbs/fat conservatively. Do not invent omitted ingredients. For workouts, do not estimate calorie burn. For questions, answer concisely.`;
+For food/drink, split ONLY the current message into ingredients. Match a known key when clearly appropriate. For a generic unqualified tortilla, prefer corn_tortilla_6in; if the user explicitly says flour/harina, use flour_tortilla_8in. Preserve every explicitly stated food and quantity. Never omit a stated ingredient. For unknown prepared foods, use key 'unknown' and estimate only that item's nutrition conservatively. Do not invent omitted ingredients. For workouts, do not estimate calorie burn. For questions, answer concisely.`;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: MODEL,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: text }
-        ],
+        messages: [{ role: 'system', content: system },{ role: 'user', content: text }],
         response_format: {
           type: 'json_schema',
           json_schema: {
-            name: 'fitness_parse',
-            strict: true,
+            name: 'fitness_parse', strict: true,
             schema: {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                type: { type: 'string', enum: ['food', 'workout', 'question'] },
-                name: { type: 'string' },
-                items: {
-                  type: 'array',
-                  items: {
-                    type: 'object',
-                    additionalProperties: false,
-                    properties: {
-                      key: { type: 'string', enum: [...KNOWN_KEYS, 'unknown'] },
-                      label: { type: 'string' },
-                      quantity: { type: 'number', minimum: 0 },
-                      grams: { type: 'number', minimum: 0 },
-                      ml: { type: 'number', minimum: 0 },
-                      estimated_calories: { type: 'number', minimum: 0 },
-                      estimated_protein_g: { type: 'number', minimum: 0 },
-                      estimated_carbs_g: { type: 'number', minimum: 0 },
-                      estimated_fat_g: { type: 'number', minimum: 0 }
-                    },
-                    required: ['key','label','quantity','grams','ml','estimated_calories','estimated_protein_g','estimated_carbs_g','estimated_fat_g']
-                  }
-                },
-                note: { type: 'string' },
-                answer: { type: 'string' }
-              },
-              required: ['type','name','items','note','answer']
+              type:'object',additionalProperties:false,
+              properties:{
+                type:{type:'string',enum:['food','workout','question']},name:{type:'string'},
+                items:{type:'array',items:{type:'object',additionalProperties:false,properties:{
+                  key:{type:'string',enum:[...KNOWN_KEYS,'unknown']},label:{type:'string'},quantity:{type:'number',minimum:0},
+                  grams:{type:'number',minimum:0},ml:{type:'number',minimum:0},estimated_calories:{type:'number',minimum:0},
+                  estimated_protein_g:{type:'number',minimum:0},estimated_carbs_g:{type:'number',minimum:0},estimated_fat_g:{type:'number',minimum:0}
+                },required:['key','label','quantity','grams','ml','estimated_calories','estimated_protein_g','estimated_carbs_g','estimated_fat_g']}},
+                note:{type:'string'},answer:{type:'string'}
+              },required:['type','name','items','note','answer']
             }
           }
         }
@@ -81,52 +122,18 @@ For food/drink, split the current message into ingredients. Match a known key wh
     });
 
     const data = await response.json();
-    if (!response.ok) {
-      console.error('OpenAI error', data);
-      return json(res, response.status, { error: data?.error?.message || 'AI request failed' });
-    }
+    if (!response.ok) return json(res, response.status, { error: data?.error?.message || 'AI request failed' });
     const raw = data?.choices?.[0]?.message?.content;
     if (!raw) return json(res, 502, { error: 'AI returned no content' });
     const parsed = JSON.parse(raw);
+    if (parsed.type !== 'food') return json(res, 200, { ...parsed, calories:0,protein_g:0,carbs_g:0,fat_g:0,source:'ai-parser',model:MODEL });
 
-    if (parsed.type !== 'food') return json(res, 200, { ...parsed, calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, source: 'ai-parser', model: MODEL });
-
-    const resolved = parsed.items.map(item => {
-      if (item.key !== 'unknown') {
-        const n = nutritionFor(item.key, item.quantity, item.grams, item.ml);
-        return { ...item, ...n };
-      }
-      return {
-        ...item,
-        calories: Math.round(item.estimated_calories || 0),
-        protein_g: +(item.estimated_protein_g || 0).toFixed(1),
-        carbs_g: +(item.estimated_carbs_g || 0).toFixed(1),
-        fat_g: +(item.estimated_fat_g || 0).toFixed(1),
-        source: 'ai-estimate'
-      };
-    });
-
-    const totals = resolved.reduce((a, i) => ({
-      calories: a.calories + (i.calories || 0),
-      protein_g: a.protein_g + (i.protein_g || 0),
-      carbs_g: a.carbs_g + (i.carbs_g || 0),
-      fat_g: a.fat_g + (i.fat_g || 0)
-    }), { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 });
-
-    const sources = [...new Set(resolved.map(i => i.source))];
-    return json(res, 200, {
-      type: 'food',
-      name: parsed.name || text,
-      items: resolved,
-      calories: Math.round(totals.calories),
-      protein_g: +totals.protein_g.toFixed(1),
-      carbs_g: +totals.carbs_g.toFixed(1),
-      fat_g: +totals.fat_g.toFixed(1),
-      note: parsed.note,
-      answer: parsed.answer,
-      source: sources.length === 1 ? sources[0] : 'mixed',
-      model: MODEL
-    });
+    const resolved = parsed.items.map(item => item.key !== 'unknown'
+      ? { ...item, ...nutritionFor(item.key,item.quantity,item.grams,item.ml) }
+      : { ...item, calories:Math.round(item.estimated_calories||0), protein_g:+(item.estimated_protein_g||0).toFixed(1), carbs_g:+(item.estimated_carbs_g||0).toFixed(1), fat_g:+(item.estimated_fat_g||0).toFixed(1), source:'ai-estimate' });
+    const totals = resolved.reduce((a,i)=>({calories:a.calories+(i.calories||0),protein_g:a.protein_g+(i.protein_g||0),carbs_g:a.carbs_g+(i.carbs_g||0),fat_g:a.fat_g+(i.fat_g||0)}),{calories:0,protein_g:0,carbs_g:0,fat_g:0});
+    const sources=[...new Set(resolved.map(i=>i.source))];
+    return json(res,200,{type:'food',name:parsed.name||text,items:resolved,calories:Math.round(totals.calories),protein_g:+totals.protein_g.toFixed(1),carbs_g:+totals.carbs_g.toFixed(1),fat_g:+totals.fat_g.toFixed(1),note:parsed.note,answer:parsed.answer,source:sources.length===1?sources[0]:'mixed',model:MODEL});
   } catch (error) {
     console.error(error);
     return json(res, 500, { error: 'Unable to process entry' });
