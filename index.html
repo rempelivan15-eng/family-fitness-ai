@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#111827" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <title>Family Fitness AI</title>
+  <style>
+    :root{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#111827;background:#f3f4f6}*{box-sizing:border-box}body{margin:0;min-height:100vh}.app{max-width:760px;margin:auto;padding:20px 16px 100px}.top{display:flex;justify-content:space-between;align-items:center;gap:12px}.brand{font-weight:800;font-size:1.25rem}.pill{background:#fff;border:1px solid #e5e7eb;border-radius:999px;padding:8px 12px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:18px 0}.card{background:#fff;border-radius:18px;padding:16px;box-shadow:0 8px 24px rgba(0,0,0,.05)}.big{grid-column:1/-1}.metric{font-size:1.8rem;font-weight:800;margin-top:4px}.muted{color:#6b7280;font-size:.9rem}.progress{height:10px;background:#e5e7eb;border-radius:99px;overflow:hidden;margin-top:10px}.bar{height:100%;background:#111827}.actions{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.btn{border:0;border-radius:14px;padding:13px 10px;font-weight:700;background:#111827;color:#fff;cursor:pointer}.btn.secondary{background:#fff;color:#111827;border:1px solid #d1d5db}.inputrow{display:flex;gap:8px;margin-top:10px}.inputrow input{flex:1;border:1px solid #d1d5db;border-radius:12px;padding:12px;font-size:1rem}.feed{display:flex;flex-direction:column;gap:8px;margin-top:12px}.entry{padding:10px 12px;background:#f9fafb;border-radius:12px;display:flex;justify-content:space-between;gap:10px}.nav{position:fixed;left:0;right:0;bottom:0;background:rgba(255,255,255,.95);backdrop-filter:blur(12px);border-top:1px solid #e5e7eb;padding:10px 12px calc(10px + env(safe-area-inset-bottom));display:flex;justify-content:center}.navinner{width:min(760px,100%);display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.nav button{background:transparent;border:0;padding:10px 4px;font-weight:700;color:#4b5563}.section{display:none}.section.active{display:block}.mic{width:72px;height:72px;border-radius:50%;border:0;background:#111827;color:white;font-size:28px;cursor:pointer}.center{text-align:center}.userselect{border:1px solid #d1d5db;background:#fff;border-radius:12px;padding:9px 10px;font-weight:700}@media(min-width:650px){.grid{grid-template-columns:repeat(4,1fr)}.big{grid-column:span 2}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <div><div class="brand">Family Fitness AI</div><div class="muted" id="dateLabel"></div></div>
+    <select id="userSelect" class="userselect"><option>Ivan</option><option>Wife</option></select>
+  </div>
+
+  <section id="today" class="section active">
+    <div class="grid">
+      <div class="card"><div class="muted">Calories</div><div class="metric"><span id="calories">0</span></div><div class="muted">of <span id="calTarget">2200</span> kcal</div><div class="progress"><div id="calBar" class="bar" style="width:0%"></div></div></div>
+      <div class="card"><div class="muted">Protein</div><div class="metric"><span id="protein">0</span>g</div><div class="muted">of <span id="proteinTarget">170</span> g</div><div class="progress"><div id="proteinBar" class="bar" style="width:0%"></div></div></div>
+      <div class="card"><div class="muted">Water</div><div class="metric"><span id="water">0</span>L</div><button class="btn secondary" style="margin-top:10px" onclick="addWater()">+ 0.5 L</button></div>
+      <div class="card"><div class="muted">Workout</div><div class="metric" id="workoutCount">0</div><div class="muted">activities logged</div></div>
+    </div>
+
+    <div class="card big">
+      <div class="center"><div class="muted">Quick voice log</div><button id="micBtn" class="mic" aria-label="Voice log">🎙️</button><div id="micStatus" class="muted" style="margin-top:8px">Tap and speak naturally</div></div>
+      <div class="inputrow"><input id="logInput" placeholder="e.g. I ate 3 eggs and 4 tortillas"/><button class="btn" onclick="smartLog()">Add</button></div>
+    </div>
+
+    <div class="card" style="margin-top:12px"><strong>Today</strong><div id="todayFeed" class="feed"></div></div>
+  </section>
+
+  <section id="food" class="section"><div class="card"><h2 style="margin-top:0">Food log</h2><p class="muted">Add calories and protein manually while the live AI connection is being wired in.</p><div class="inputrow"><input id="foodName" placeholder="Food / meal"/></div><div class="inputrow"><input id="foodCal" type="number" placeholder="Calories"/><input id="foodProtein" type="number" placeholder="Protein g"/><button class="btn" onclick="addFoodManual()">Add</button></div><div id="foodFeed" class="feed"></div></div></section>
+
+  <section id="workout" class="section"><div class="card"><h2 style="margin-top:0">Workout</h2><div class="inputrow"><input id="workoutText" placeholder="e.g. 30 push-ups, 3 sets squats"/><button class="btn" onclick="addWorkout()">Add</button></div><div id="workoutFeed" class="feed"></div></div></section>
+
+  <section id="progress" class="section"><div class="card"><h2 style="margin-top:0">Progress</h2><div class="inputrow"><input id="weightInput" type="number" step="0.1" placeholder="Weight kg"/><button class="btn" onclick="addWeight()">Save</button></div><div id="weightFeed" class="feed"></div></div></section>
+</div>
+
+<div class="nav"><div class="navinner"><button onclick="showSection('today')">Today</button><button onclick="showSection('food')">Food</button><button onclick="showSection('workout')">Workout</button><button onclick="showSection('progress')">Progress</button></div></div>
+
+<script>
+const KEY='familyFitnessAI_v1';
+const defaultState={Ivan:{targets:{calories:2200,protein:170},water:0,food:[],workouts:[],weights:[]},Wife:{targets:{calories:1800,protein:120},water:0,food:[],workouts:[],weights:[]}};
+let state=JSON.parse(localStorage.getItem(KEY)||'null')||defaultState;
+let user='Ivan';
+function save(){localStorage.setItem(KEY,JSON.stringify(state));render()}
+function todayISO(){return new Date().toISOString().slice(0,10)}
+function todayItems(arr){return arr.filter(x=>x.date===todayISO())}
+function render(){const d=state[user];const foods=todayItems(d.food);const workouts=todayItems(d.workouts);const cal=foods.reduce((s,x)=>s+(+x.calories||0),0);const p=foods.reduce((s,x)=>s+(+x.protein||0),0);calories.textContent=cal;protein.textContent=p;water.textContent=d.water.toFixed(1);workoutCount.textContent=workouts.length;calTarget.textContent=d.targets.calories;proteinTarget.textContent=d.targets.protein;calBar.style.width=Math.min(100,cal/d.targets.calories*100)+'%';proteinBar.style.width=Math.min(100,p/d.targets.protein*100)+'%';foodFeed.innerHTML=foods.slice().reverse().map(x=>entry(x.name,`${x.calories} kcal • ${x.protein}g`)).join('')||'<div class="muted">No food yet.</div>';workoutFeed.innerHTML=workouts.slice().reverse().map(x=>entry(x.text,'Workout')).join('')||'<div class="muted">No workout yet.</div>';weightFeed.innerHTML=d.weights.slice().reverse().map(x=>entry(x.date,`${x.kg} kg`)).join('')||'<div class="muted">No weights yet.</div>';todayFeed.innerHTML=[...foods.map(x=>({a:x.name,b:`${x.calories} kcal • ${x.protein}g`})),...workouts.map(x=>({a:x.text,b:'Workout'}))].reverse().map(x=>entry(x.a,x.b)).join('')||'<div class="muted">Nothing logged yet.</div>'}
+function entry(a,b){return `<div class="entry"><span>${escapeHtml(a)}</span><span class="muted">${escapeHtml(b)}</span></div>`}
+function escapeHtml(s){return String(s).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
+function showSection(id){document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active')}
+function addWater(){state[user].water+=.5;save()}
+function addFoodManual(){if(!foodName.value.trim())return;state[user].food.push({date:todayISO(),name:foodName.value.trim(),calories:+foodCal.value||0,protein:+foodProtein.value||0});foodName.value=foodCal.value=foodProtein.value='';save()}
+function addWorkout(){if(!workoutText.value.trim())return;state[user].workouts.push({date:todayISO(),text:workoutText.value.trim()});workoutText.value='';save()}
+function addWeight(){if(!weightInput.value)return;state[user].weights.push({date:todayISO(),kg:+weightInput.value});weightInput.value='';save()}
+function smartLog(){const t=logInput.value.trim();if(!t)return;const low=t.toLowerCase();if(/push|squat|pull.?up|workout|lift|run|walk|dumbbell|exercise/.test(low)){state[user].workouts.push({date:todayISO(),text:t})}else{state[user].food.push({date:todayISO(),name:t,calories:0,protein:0})}logInput.value='';save()}
+userSelect.addEventListener('change',e=>{user=e.target.value;render()});
+dateLabel.textContent=new Date().toLocaleDateString(undefined,{weekday:'long',month:'short',day:'numeric'});
+const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;if(SpeechRecognition){const rec=new SpeechRecognition();rec.lang='en-US';rec.interimResults=false;micBtn.onclick=()=>{micStatus.textContent='Listening…';rec.start()};rec.onresult=e=>{logInput.value=e.results[0][0].transcript;micStatus.textContent='Captured — tap Add';};rec.onerror=()=>micStatus.textContent='Voice input unavailable. Type instead.';rec.onend=()=>{if(micStatus.textContent==='Listening…')micStatus.textContent='Tap and speak naturally'}}else{micBtn.onclick=()=>micStatus.textContent='Voice recognition is not supported in this browser.'}
+if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});render();
+</script>
+</body>
+</html>
