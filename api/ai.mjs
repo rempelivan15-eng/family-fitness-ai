@@ -16,12 +16,23 @@ function deterministicFoodParse(text){
  const unknown=norm(leftover).split(' ').filter(Boolean).filter(w=>!FILLER.has(w)&&!NUMBER_WORDS[w]&&!/^\d+(?:\.\d+)?$/.test(w));if(unknown.length)return null;
  const items=matches.map(m=>({key:m.key,quantity:m.quantity,...nutritionFor(m.key,m.quantity,null,null)}));
  const totals=items.reduce((a,i)=>({calories:a.calories+i.calories,protein_g:a.protein_g+i.protein_g,carbs_g:a.carbs_g+i.carbs_g,fat_g:a.fat_g+i.fat_g}),{calories:0,protein_g:0,carbs_g:0,fat_g:0});
- return{type:'food',name:items.map(i=>`${i.quantity} ${i.label}${i.quantity===1?'':'s'}`).join(' + '),items,calories:Math.round(totals.calories),protein_g:+totals.protein_g.toFixed(1),carbs_g:+totals.carbs_g.toFixed(1),fat_g:+totals.fat_g.toFixed(1),note:'Calculated from local reference foods; no AI estimate used.',answer:'',source:'local-reference',model:'deterministic-local'};
+ return{type:'food',name:foodNameFromItems(items),items,calories:Math.round(totals.calories),protein_g:+totals.protein_g.toFixed(1),carbs_g:+totals.carbs_g.toFixed(1),fat_g:+totals.fat_g.toFixed(1),note:'Calculated from local reference foods; no AI estimate used.',answer:'',source:'local-reference',model:'deterministic-local'};
 }
-function workoutCalories(met,minutes,weightKg){
- const m=Number(met)||0,min=Number(minutes)||0,kg=Number(weightKg)||0;
- if(!m||!min||!kg)return 0;
- return Math.max(0,Math.round(m*3.5*kg/200*min));
+function workoutCalories(met,minutes,weightKg){const m=Number(met)||0,min=Number(minutes)||0,kg=Number(weightKg)||0;if(!m||!min||!kg)return 0;return Math.max(0,Math.round(m*3.5*kg/200*min));}
+function foodNameFromItems(items=[]){return items.map(i=>{const q=Number(i.quantity)||0;const label=i.label||i.key||'food';return q>0?`${q} ${label}${q===1?'':'s'}`:label;}).join(' + ')||'Meal';}
+function isGenericMealName(name=''){return /^(meal|food|breakfast|lunch|dinner|snack|my meal|mixed meal)$/i.test(String(name).trim());}
+function estimateRepDuration(text){
+ const t=norm(text);
+ const exerciseWords='push ups?|pushups?|crunches?|sit ups?|situps?|squats?|lunges?|burpees?|high knees?|jumping jacks?|pull ups?|pullups?|dips?|mountain climbers?|reps?';
+ const re=new RegExp(`\\b(\\d{1,4})\\s+(?:${exerciseWords})\\b`,'g');
+ let m,totalReps=0,groups=0;while((m=re.exec(t))){totalReps+=Number(m[1])||0;groups++;}
+ if(!totalReps)return 0;
+ // Conservative working-time estimate: about 2.5 seconds per rep, plus transition/rest time.
+ // Minimum 3 minutes so short circuits do not misleadingly appear as near-zero exercise.
+ const activeSeconds=totalReps*2.5;
+ const transitionSeconds=Math.max(0,groups-1)*30;
+ const restSeconds=groups*20;
+ return Math.max(3,Math.min(45,Math.round((activeSeconds+transitionSeconds+restSeconds)/60)));
 }
 export default async function handler(req,res){if(req.method!=='POST')return json(res,405,{error:'POST only'});try{
  const body=typeof req.body==='string'?JSON.parse(req.body):(req.body||{}),text=String(body.text||'').trim().slice(0,1200),user=String(body.user||'User').slice(0,40),context=body.context&&typeof body.context==='object'?body.context:{};if(!text)return json(res,400,{error:'Missing text'});
@@ -29,17 +40,27 @@ export default async function handler(req,res){if(req.method!=='POST')return jso
  const apiKey=(process.env.OPENAI_API_KEY||process.env.OPEN_API_KEY||process.env.open_api_key||process.env.openai_api_key||'').trim();if(!apiKey)return json(res,500,{error:'OpenAI API key is not configured for this deployment'});
  const catalog=KNOWN_KEYS.map(k=>`${k}: ${FOODS[k].label} (${FOODS[k].per})`).join('; ');
  const system=`You are a precise fallback parser for a private nutrition and workout logging app. ONLY parse the CURRENT user message. Never import foods, workouts, or quantities from previous messages. User: ${user}. Known local food keys: ${catalog}.
-For food/drink, split only the current message into ingredients. Preserve every stated food and quantity. Match a known key when appropriate. Generic tortilla means corn_tortilla_6in unless flour/harina is explicit. Unknown prepared foods use key 'unknown' and estimate only that item conservatively.
-For workouts, identify the activity, duration in minutes if stated, and choose a conservative MET value representing the overall session intensity. Examples: light resistance training around 3.5 MET, moderate resistance/calisthenics around 5 MET, vigorous circuit/calisthenics around 7-8 MET, brisk walking around 4 MET, jogging around 7 MET. If duration is not stated, set duration_min=0 and note that calorie burn cannot be estimated until duration is provided. Do not fabricate duration. The server will calculate calories from MET, duration, and the user's saved weight.
+For food/drink, split only the current message into ingredients. Preserve every stated food and quantity. Match a known key when appropriate. Generic tortilla means corn_tortilla_6in unless flour/harina is explicit. Unknown prepared foods use key 'unknown' and estimate only that item conservatively. Give the meal a descriptive name based only on the foods in this message; never return just "meal" if the foods are known.
+For workouts, identify the activity, duration in minutes if explicitly stated, and choose a conservative MET value representing the overall session intensity. Examples: light resistance training around 3.5 MET, moderate resistance/calisthenics around 5 MET, vigorous circuit/calisthenics around 7-8 MET, brisk walking around 4 MET, jogging around 7 MET. If duration is not stated, set duration_min=0. Do not invent duration; the server may derive a conservative duration from explicit rep counts.
 For general questions, answer concisely. Current profile context: ${JSON.stringify(context)}.`;
  const response=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json'},body:JSON.stringify({model:MODEL,messages:[{role:'system',content:system},{role:'user',content:text}],response_format:{type:'json_schema',json_schema:{name:'fitness_parse',strict:true,schema:{type:'object',additionalProperties:false,properties:{type:{type:'string',enum:['food','workout','question']},name:{type:'string'},items:{type:'array',items:{type:'object',additionalProperties:false,properties:{key:{type:'string',enum:[...KNOWN_KEYS,'unknown']},label:{type:'string'},quantity:{type:'number',minimum:0},grams:{type:'number',minimum:0},ml:{type:'number',minimum:0},estimated_calories:{type:'number',minimum:0},estimated_protein_g:{type:'number',minimum:0},estimated_carbs_g:{type:'number',minimum:0},estimated_fat_g:{type:'number',minimum:0}},required:['key','label','quantity','grams','ml','estimated_calories','estimated_protein_g','estimated_carbs_g','estimated_fat_g']}},duration_min:{type:'number',minimum:0},met:{type:'number',minimum:0,maximum:20},note:{type:'string'},answer:{type:'string'}},required:['type','name','items','duration_min','met','note','answer']}}}})});
  const data=await response.json();if(!response.ok)return json(res,response.status,{error:data?.error?.message||'AI request failed'});const raw=data?.choices?.[0]?.message?.content;if(!raw)return json(res,502,{error:'AI returned no content'});const parsed=JSON.parse(raw);
  if(parsed.type==='workout'){
-  const weightKg=Number(context.weight_kg)||0;const burn=workoutCalories(parsed.met,parsed.duration_min,weightKg);
-  const noteParts=[];if(parsed.note)noteParts.push(parsed.note);if(!weightKg)noteParts.push('Add body weight in Profile to estimate calories burned.');else if(!parsed.duration_min)noteParts.push('Add workout duration to estimate calories burned.');else noteParts.push(`Estimated using ${parsed.met} MET and ${weightKg} kg body weight.`);
-  return json(res,200,{type:'workout',name:parsed.name||text,duration_min:+parsed.duration_min||0,met:+parsed.met||0,calories_burned:burn,note:noteParts.join(' '),answer:'',source:'met-estimate',model:MODEL});
+  const weightKg=Number(context.weight_kg)||0;
+  const explicitDuration=Number(parsed.duration_min)||0;
+  const derivedDuration=explicitDuration?0:estimateRepDuration(text);
+  const duration=explicitDuration||derivedDuration;
+  const burn=workoutCalories(parsed.met,duration,weightKg);
+  const noteParts=[];if(parsed.note)noteParts.push(parsed.note);
+  if(!weightKg)noteParts.push('Add body weight in Profile to estimate calories burned.');
+  else if(!duration)noteParts.push('Add workout duration or rep counts to estimate calories burned.');
+  else if(derivedDuration)noteParts.push(`Duration estimated at about ${derivedDuration} min from the rep counts; calorie burn uses ${parsed.met} MET and ${weightKg} kg body weight.`);
+  else noteParts.push(`Estimated using ${parsed.met} MET, ${duration} min, and ${weightKg} kg body weight.`);
+  return json(res,200,{type:'workout',name:parsed.name||text,duration_min:duration,duration_estimated:!!derivedDuration,met:+parsed.met||0,calories_burned:burn,note:noteParts.join(' '),answer:'',source:derivedDuration?'met-rep-duration-estimate':'met-estimate',model:MODEL});
  }
  if(parsed.type!=='food')return json(res,200,{...parsed,calories:0,protein_g:0,carbs_g:0,fat_g:0,source:'ai-parser',model:MODEL});
  const resolved=parsed.items.map(item=>item.key!=='unknown'?{...item,...nutritionFor(item.key,item.quantity,item.grams,item.ml)}:{...item,calories:Math.round(item.estimated_calories||0),protein_g:+(item.estimated_protein_g||0).toFixed(1),carbs_g:+(item.estimated_carbs_g||0).toFixed(1),fat_g:+(item.estimated_fat_g||0).toFixed(1),source:'ai-estimate'});
- const totals=resolved.reduce((a,i)=>({calories:a.calories+(i.calories||0),protein_g:a.protein_g+(i.protein_g||0),carbs_g:a.carbs_g+(i.carbs_g||0),fat_g:a.fat_g+(i.fat_g||0)}),{calories:0,protein_g:0,carbs_g:0,fat_g:0}),sources=[...new Set(resolved.map(i=>i.source))];return json(res,200,{type:'food',name:parsed.name||text,items:resolved,calories:Math.round(totals.calories),protein_g:+totals.protein_g.toFixed(1),carbs_g:+totals.carbs_g.toFixed(1),fat_g:+totals.fat_g.toFixed(1),note:parsed.note,answer:parsed.answer,source:sources.length===1?sources[0]:'mixed',model:MODEL});
+ const totals=resolved.reduce((a,i)=>({calories:a.calories+(i.calories||0),protein_g:a.protein_g+(i.protein_g||0),carbs_g:a.carbs_g+(i.carbs_g||0),fat_g:a.fat_g+(i.fat_g||0)}),{calories:0,protein_g:0,carbs_g:0,fat_g:0}),sources=[...new Set(resolved.map(i=>i.source))];
+ const finalName=isGenericMealName(parsed.name)?foodNameFromItems(resolved):(parsed.name||foodNameFromItems(resolved));
+ return json(res,200,{type:'food',name:finalName,items:resolved,calories:Math.round(totals.calories),protein_g:+totals.protein_g.toFixed(1),carbs_g:+totals.carbs_g.toFixed(1),fat_g:+totals.fat_g.toFixed(1),note:parsed.note,answer:parsed.answer,source:sources.length===1?sources[0]:'mixed',model:MODEL});
 }catch(error){console.error(error);return json(res,500,{error:'Unable to process entry'});}}
